@@ -104,9 +104,9 @@ void opcontrol() {
 	constexpr double lift_min = 0;
 	constexpr double lift_max = 9.89 * 360 * 100;
 	constexpr double arm_start = 0.0;
-	constexpr double arm_90 = 90.0;
-	constexpr double arm_release_clear = 120.0;
-	constexpr double arm_test_position = 975.0;
+	constexpr double arm_out_position = 2400.0;
+	constexpr double arm_release_clear = 3000.0;
+	constexpr double arm_test_position = 2400.0;
 	constexpr int64_t lift_macro_delay_ms = 150;
 	constexpr int64_t holder_release_time_ms = 250;
 	constexpr int64_t arm_macro_timeout_ms = 1500;
@@ -145,7 +145,6 @@ void opcontrol() {
 		pros::lcd::print(0, "%d %d %d", (pros::lcd::read_buttons() & LCD_BTN_LEFT) >> 2,
 		                 (pros::lcd::read_buttons() & LCD_BTN_CENTER) >> 1,
 		                 (pros::lcd::read_buttons() & LCD_BTN_RIGHT) >> 0);  // Prints status of the emulated screen LCDs
-		pros::lcd::print(1, "arm: %.1f deg", arm.get_position());
 
 		// Arcade control scheme
 		int dir = -master.get_analog(ANALOG_LEFT_Y);
@@ -181,7 +180,7 @@ void opcontrol() {
 
 		bool up_pressed = master.get_digital(pros::E_CONTROLLER_DIGITAL_UP);
 		if (up_pressed && !up_pressed_last && arm_macro_state == ArmMacroState::IDLE &&
-		    release_macro_state == ReleaseMacroState::INACTIVE && arm_extended && arm.get_position() >= arm_90 - 3.0) {
+		    release_macro_state == ReleaseMacroState::INACTIVE && arm_extended && arm.get_position() >= arm_out_position - 3.0) {
 			release_macro_state = ReleaseMacroState::RELEASE_HOLDER;
 			release_start_ms = pros::millis();
 		}
@@ -222,10 +221,10 @@ void opcontrol() {
 				macro_state_start_ms = pros::millis();
 			}
 		} else if (arm_macro_state == ArmMacroState::ARM_OUT) {
-			arm.move_absolute(arm_90, 200);
-			if (arm.get_position() >= arm_90 - 3.0 ||
+			arm.move_absolute(arm_out_position, 200);
+			if (arm.get_position() >= arm_out_position - 3.0 ||
 			    pros::millis() - macro_state_start_ms >= arm_macro_timeout_ms) {
-				arm.move_absolute(arm_90, 200);
+				arm.move_absolute(arm_out_position, 200);
 				arm_macro_state = ArmMacroState::IDLE;
 				holder.move(holder_default_speed);
 			} else {
