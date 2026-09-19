@@ -196,11 +196,11 @@ void opcontrol() {
 				release_start_ms = pros::millis();
 			}
 		} else if (release_macro_state == ReleaseMacroState::RAISE_CLEAR) {
-			arm.move_absolute(arm_release_clear, 127);
+			arm.move_absolute(arm_release_clear, 200);
 			holder.move(holder_default_speed);
 			if (arm.get_position() >= arm_release_clear - 3.0 ||
 			    pros::millis() - release_start_ms >= arm_macro_timeout_ms) {
-				arm.move_absolute(arm_release_clear, 127);
+				arm.move_absolute(arm_release_clear, 200);
 				release_macro_state = ReleaseMacroState::INACTIVE;
 			}
 		} else if (arm_macro_state == ArmMacroState::LIFT_UP) {
@@ -211,21 +211,21 @@ void opcontrol() {
 				macro_state_start_ms = pros::millis();
 			}
 		} else if (arm_macro_state == ArmMacroState::ARM_OUT) {
-			arm.move_absolute(arm_90, 127);
+			arm.move_absolute(arm_90, 200);
 			if (arm.get_position() >= arm_90 - 3.0 ||
 			    pros::millis() - macro_state_start_ms >= arm_macro_timeout_ms) {
-				arm.move_absolute(arm_90, 127);
+				arm.move_absolute(arm_90, 200);
 				arm_macro_state = ArmMacroState::IDLE;
 				holder.move(holder_default_speed);
 			} else {
 				holder.move(holder_macro_speed);
 			}
 		} else if (arm_macro_state == ArmMacroState::ARM_RETURN) {
-			arm.move_absolute(arm_start, 127);
+			arm.move_absolute(arm_start, 200);
 			holder.move(holder_default_speed);
 			if (arm.get_position() <= arm_start + 3.0 ||
 			    pros::millis() - macro_state_start_ms >= arm_macro_timeout_ms) {
-				arm.move_absolute(arm_start, 127);
+				arm.move_absolute(arm_start, 200);
 				arm_macro_state = ArmMacroState::IDLE;
 			}
 		} else {
