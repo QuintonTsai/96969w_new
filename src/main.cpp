@@ -109,7 +109,7 @@ void opcontrol() {
 	constexpr double arm_test_position = 2400.0;
 	constexpr int64_t lift_macro_delay_ms = 150;
 	constexpr int64_t holder_release_time_ms = 250;
-	constexpr int64_t arm_macro_timeout_ms = 1500;
+	constexpr int64_t arm_macro_timeout_ms = 3000;
 	const int holder_default_speed = 50;
 	const int holder_macro_speed = 127;
 	const int holder_release_speed = -127;
@@ -123,7 +123,9 @@ void opcontrol() {
 		IDLE,
 		LIFT_UP,
 		ARM_OUT,
-		ARM_RETURN
+		ARM_RETURN,
+		TEST_OUT,
+		TEST_RETURN
 	};
 	enum class ReleaseMacroState {
 		INACTIVE,
@@ -189,7 +191,15 @@ void opcontrol() {
 		bool down_pressed = master.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN);
 		if (down_pressed && !down_pressed_last && arm_macro_state == ArmMacroState::IDLE &&
 		    release_macro_state == ReleaseMacroState::INACTIVE) {
-			arm_test_at_90 = !arm_test_at_90;
+			if (!arm_test_at_90) {
+				arm_macro_state = ArmMacroState::TEST_OUT;
+				macro_state_start_ms = pros::millis();
+				arm_test_at_90 = true;
+			} else {
+				arm_macro_state = ArmMacroState::TEST_RETURN;
+				macro_state_start_ms = pros::millis();
+				arm_test_at_90 = false;
+			}
 		}
 		down_pressed_last = down_pressed;
 
@@ -201,6 +211,7 @@ void opcontrol() {
 		double lift_motor_position = lift.get_position();
 		if (release_macro_state == ReleaseMacroState::RELEASE_HOLDER) {
 			holder.move(holder_release_speed);
+			lift.move_absolute(lift_target, 100);
 			if (pros::millis() - release_start_ms >= holder_release_time_ms) {
 				release_macro_state = ReleaseMacroState::RAISE_CLEAR;
 				release_start_ms = pros::millis();
@@ -208,6 +219,7 @@ void opcontrol() {
 		} else if (release_macro_state == ReleaseMacroState::RAISE_CLEAR) {
 			arm.move_absolute(arm_release_clear, 200);
 			holder.move(holder_default_speed);
+			lift.move_absolute(lift_target, 100);
 			if (arm.get_position() >= arm_release_clear - 3.0 ||
 			    pros::millis() - release_start_ms >= arm_macro_timeout_ms) {
 				arm.move_absolute(arm_release_clear, 200);
@@ -217,11 +229,13 @@ void opcontrol() {
 			lift.move(127);
 			holder.move(holder_macro_speed);
 			if (pros::millis() - macro_state_start_ms >= lift_macro_delay_ms) {
+				lift_target = lift_motor_position;
 				arm_macro_state = ArmMacroState::ARM_OUT;
 				macro_state_start_ms = pros::millis();
 			}
 		} else if (arm_macro_state == ArmMacroState::ARM_OUT) {
 			arm.move_absolute(arm_out_position, 200);
+			lift.move_absolute(lift_target, 100);
 			if (arm.get_position() >= arm_out_position - 3.0 ||
 			    pros::millis() - macro_state_start_ms >= arm_macro_timeout_ms) {
 				arm.move_absolute(arm_out_position, 200);
@@ -233,13 +247,30 @@ void opcontrol() {
 		} else if (arm_macro_state == ArmMacroState::ARM_RETURN) {
 			arm.move_absolute(arm_start, 200);
 			holder.move(holder_default_speed);
+			lift.move_absolute(lift_target, 100);
+			if (arm.get_position() <= arm_start + 3.0 ||
+			    pros::millis() - macro_state_start_ms >= arm_macro_timeout_ms) {
+				arm.move_absolute(arm_start, 200);
+				arm_macro_state = ArmMacroState::IDLE;
+			}
+		} else if (arm_macro_state == ArmMacroState::TEST_OUT) {
+			arm.move_absolute(arm_test_position, 200);
+			lift.move_absolute(lift_target, 100);
+			if (arm.get_position() >= arm_test_position - 3.0 ||
+			    pros::millis() - macro_state_start_ms >= arm_macro_timeout_ms) {
+				arm.move_absolute(arm_test_position, 200);
+				arm_macro_state = ArmMacroState::IDLE;
+			}
+		} else if (arm_macro_state == ArmMacroState::TEST_RETURN) {
+			arm.move_absolute(arm_start, 200);
+			lift.move_absolute(lift_target, 100);
 			if (arm.get_position() <= arm_start + 3.0 ||
 			    pros::millis() - macro_state_start_ms >= arm_macro_timeout_ms) {
 				arm.move_absolute(arm_start, 200);
 				arm_macro_state = ArmMacroState::IDLE;
 			}
 		} else {
-			arm.move_absolute(arm_test_at_90 ? arm_test_position : arm_start, 200);
+			arm.move(0);
 			if (holder_macro_active) {
 				holder.move(holder_macro_speed);
 			} else {
