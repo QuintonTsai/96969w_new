@@ -106,7 +106,7 @@ void opcontrol() {
 	constexpr double arm_start = 0.0;
 	constexpr double arm_90 = 90.0;
 	constexpr double arm_release_clear = 120.0;
-	constexpr double arm_test_position = 1800.0;
+	constexpr double arm_test_position = 975.0;
 	constexpr int64_t lift_macro_delay_ms = 150;
 	constexpr int64_t holder_release_time_ms = 250;
 	constexpr int64_t arm_macro_timeout_ms = 1500;
@@ -145,6 +145,7 @@ void opcontrol() {
 		pros::lcd::print(0, "%d %d %d", (pros::lcd::read_buttons() & LCD_BTN_LEFT) >> 2,
 		                 (pros::lcd::read_buttons() & LCD_BTN_CENTER) >> 1,
 		                 (pros::lcd::read_buttons() & LCD_BTN_RIGHT) >> 0);  // Prints status of the emulated screen LCDs
+		pros::lcd::print(1, "arm: %.1f deg", arm.get_position());
 
 		// Arcade control scheme
 		int dir = -master.get_analog(ANALOG_LEFT_Y);
