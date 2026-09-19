@@ -133,7 +133,9 @@ void opcontrol() {
 	ReleaseMacroState release_macro_state = ReleaseMacroState::INACTIVE;
 	bool r1_pressed_last = false;
 	bool up_pressed_last = false;
+	bool down_pressed_last = false;
 	bool arm_extended = false;
+	bool arm_test_at_90 = false;
 	int64_t macro_state_start_ms = 0;
 	int64_t release_start_ms = 0;
 
@@ -183,6 +185,13 @@ void opcontrol() {
 		}
 		up_pressed_last = up_pressed;
 
+		bool down_pressed = master.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN);
+		if (down_pressed && !down_pressed_last && arm_macro_state == ArmMacroState::IDLE &&
+		    release_macro_state == ReleaseMacroState::INACTIVE) {
+			arm_test_at_90 = !arm_test_at_90;
+		}
+		down_pressed_last = down_pressed;
+
 		bool holder_macro_active = arm_macro_state == ArmMacroState::LIFT_UP ||
 			arm_macro_state == ArmMacroState::ARM_OUT ||
 			(arm_macro_state == ArmMacroState::IDLE && arm_extended);
@@ -229,7 +238,7 @@ void opcontrol() {
 				arm_macro_state = ArmMacroState::IDLE;
 			}
 		} else {
-			arm.move(0);
+			arm.move_absolute(arm_test_at_90 ? arm_90 : arm_start, 200);
 			if (holder_macro_active) {
 				holder.move(holder_macro_speed);
 			} else {
