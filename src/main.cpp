@@ -106,7 +106,7 @@ void opcontrol() {
 	constexpr double arm_start = 0.0;
 	constexpr double arm_90 = 90.0;
 	constexpr double arm_release_clear = 120.0;
-	constexpr double arm_test_position = 975.0;
+	constexpr double arm_test_position = 1500.0;
 	constexpr int64_t lift_macro_delay_ms = 150;
 	constexpr int64_t holder_release_time_ms = 250;
 	constexpr int64_t arm_macro_timeout_ms = 1500;
