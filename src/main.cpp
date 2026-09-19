@@ -106,6 +106,7 @@ void opcontrol() {
 	constexpr double arm_start = 0.0;
 	constexpr double arm_90 = 90.0;
 	constexpr double arm_release_clear = 120.0;
+	constexpr double arm_test_position = 975.0;
 	constexpr int64_t lift_macro_delay_ms = 150;
 	constexpr int64_t holder_release_time_ms = 250;
 	constexpr int64_t arm_macro_timeout_ms = 1500;
@@ -238,7 +239,7 @@ void opcontrol() {
 				arm_macro_state = ArmMacroState::IDLE;
 			}
 		} else {
-			arm.move_absolute(arm_test_at_90 ? arm_90 : arm_start, 200);
+			arm.move_absolute(arm_test_at_90 ? arm_test_position : arm_start, 200);
 			if (holder_macro_active) {
 				holder.move(holder_macro_speed);
 			} else {
