@@ -177,7 +177,7 @@ void opcontrol() {
 
 		bool up_pressed = master.get_digital(pros::E_CONTROLLER_DIGITAL_UP);
 		if (up_pressed && !up_pressed_last && arm_macro_state == ArmMacroState::IDLE &&
-		    release_macro_state == ReleaseMacroState::INACTIVE && arm_extended && arm.get_position() >= arm_out_position - 3.0) {
+		    release_macro_state == ReleaseMacroState::INACTIVE && arm_extended) {
 			release_macro_state = ReleaseMacroState::RELEASE_HOLDER;
 			release_start_ms = pros::millis();
 		}
