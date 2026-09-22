@@ -1,5 +1,52 @@
 // test
 #include "main.h"
+#include "lemlib/api.hpp"
+
+pros::MotorGroup left_mg({-9, -10}, pros::v5::MotorGears::blue);
+pros::MotorGroup right_mg({1, 2}, pros::v5::MotorGears::blue);
+pros::Imu imu(19);
+
+lemlib::Drivetrain drivetrain(&left_mg, &right_mg,
+                               11.75, // track width, in inches
+                               lemlib::Omniwheel::NEW_325, // 3.25" omni wheels
+                               450, // wheel rpm after external gearing
+                               2); // horizontalDrift, 2 since not using traction wheels
+
+// no tracking wheels; odometry falls back to drive motor encoders + IMU
+lemlib::OdomSensors sensors(nullptr, nullptr, nullptr, nullptr, &imu);
+
+// PID constants below are starting points from LemLib's example project — tune them for this robot
+lemlib::ControllerSettings lateral_controller(10, // proportional gain (kP)
+                                               0, // integral gain (kI)
+                                               3, // derivative gain (kD)
+                                               3, // integral anti windup range
+                                               1, // small error range, in inches
+                                               100, // small error range timeout, in ms
+                                               3, // large error range, in inches
+                                               500, // large error range timeout, in ms
+                                               20); // maximum acceleration (slew)
+
+lemlib::ControllerSettings angular_controller(2, // proportional gain (kP)
+                                               0, // integral gain (kI)
+                                               10, // derivative gain (kD)
+                                               3, // integral anti windup range
+                                               1, // small error range, in degrees
+                                               100, // small error range timeout, in ms
+                                               3, // large error range, in degrees
+                                               500, // large error range timeout, in ms
+                                               0); // maximum acceleration (slew)
+
+// input curve for throttle input during driver control
+lemlib::ExpoDriveCurve throttle_curve(3, // joystick deadband out of 127
+                                       10, // minimum output where drivetrain will move out of 127
+                                       1.019); // expo curve gain
+
+// input curve for steer input during driver control
+lemlib::ExpoDriveCurve steer_curve(3, // joystick deadband out of 127
+                                    10, // minimum output where drivetrain will move out of 127
+                                    1.019); // expo curve gain
+
+lemlib::Chassis chassis(drivetrain, lateral_controller, angular_controller, sensors, &throttle_curve, &steer_curve);
 
 /**
  * Runs initialization code. This occurs as soon as the program is started.
@@ -9,6 +56,7 @@
  */
 void initialize() {
 	pros::lcd::initialize();
+	chassis.calibrate();
 }
 
 /**
@@ -40,40 +88,24 @@ void competition_initialize() {}
  * will be stopped. Re-enabling the robot will restart the task, not re-start it
  * from where it left off.
  */
-pros::MotorGroup left_mg({-9, -10}, pros::v5::MotorGears::blue);
-pros::MotorGroup right_mg({1, 2}, pros::v5::MotorGears::blue);
-
 void autonomous() {
-	const int backward_power = 80;
-	const int forward_power = 127;
-	const int64_t quarter_second = 250;
-	const int64_t one_second = 1000;
+	const int fast_power = 127;  // 100%
+	const int slow_power = 25;   // 20%
+	const int64_t wiggle_time = 100;  // ms per turn, kept short for a fast wiggle
 
+	// turn left: right group fast, left group slow
 	int64_t start = pros::millis();
-	while (pros::millis() - start < quarter_second) {
-		left_mg.move(-backward_power);
-		right_mg.move(-backward_power);
+	while (pros::millis() - start < wiggle_time) {
+		left_mg.move(slow_power);
+		right_mg.move(fast_power);
 		pros::delay(20);
 	}
 
+	// turn right: mirrored, left group fast, right group slow
 	start = pros::millis();
-	while (pros::millis() - start < one_second) {
-		left_mg.move(forward_power);
-		right_mg.move(forward_power);
-		pros::delay(20);
-	}
-
-	start = pros::millis();
-	while (pros::millis() - start < quarter_second) {
-		left_mg.move(-backward_power);
-		right_mg.move(-backward_power);
-		pros::delay(20);
-	}
-
-	start = pros::millis();
-	while (pros::millis() - start < one_second) {
-		left_mg.move(forward_power);
-		right_mg.move(forward_power);
+	while (pros::millis() - start < wiggle_time) {
+		left_mg.move(fast_power);
+		right_mg.move(slow_power);
 		pros::delay(20);
 	}
 
@@ -143,13 +175,12 @@ void opcontrol() {
 		                 (pros::lcd::read_buttons() & LCD_BTN_CENTER) >> 1,
 		                 (pros::lcd::read_buttons() & LCD_BTN_RIGHT) >> 0);  // Prints status of the emulated screen LCDs
 
-		// Arcade control scheme
-		int dir = -master.get_analog(ANALOG_LEFT_Y);
+		// Arcade control scheme, driven by the LemLib chassis
+		int dir = master.get_analog(ANALOG_LEFT_Y);
 		int turn = master.get_analog(ANALOG_RIGHT_X);
-		dir = static_cast<int>(std::clamp(dir * 2.0, -127.0, 127.0));
-		turn = static_cast<int>(std::clamp(turn * 2.0, -127.0, 127.0));
-		left_mg.move(-(dir - turn));
-		right_mg.move(-(dir + turn));
+		// desaturateBias favors turning authority over throttle when motors would otherwise saturate,
+		// so turning stays responsive even at high forward/backward speed
+		chassis.arcade(dir, turn, false, 0.75);
 
 		if (master.get_digital(pros::E_CONTROLLER_DIGITAL_R2)) {
 			intake.move(127);
