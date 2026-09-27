@@ -1,10 +1,15 @@
-// test
 #include "main.h"
 #include "lemlib/api.hpp"
 
 pros::MotorGroup left_mg({-9, -10}, pros::v5::MotorGears::blue);
 pros::MotorGroup right_mg({1, 2}, pros::v5::MotorGears::blue);
 pros::Imu imu(19);
+pros::Controller master(pros::E_CONTROLLER_MASTER);
+pros::Motor intake(11, pros::v5::MotorGears::green);
+pros::MotorGroup lift({3, -8}, pros::v5::MotorGears::green);
+pros::Motor arm(7, pros::v5::MotorGears::green);
+pros::Motor holder(6, pros::v5::MotorGears::green);
+pros::Rotation lift_rotation(5);
 
 lemlib::Drivetrain drivetrain(&left_mg, &right_mg,
                                11.75, // track width, in inches
@@ -89,25 +94,31 @@ void competition_initialize() {}
  * from where it left off.
  */
 void autonomous() {
-	const int fast_power = 127;  // 100%
-	const int slow_power = 25;   // 20%
-	const int64_t wiggle_time = 100;  // ms per turn, kept short for a fast wiggle
+
 
 	// turn left: right group fast, left group slow
 	int64_t start = pros::millis();
-	while (pros::millis() - start < wiggle_time) {
-		left_mg.move(slow_power);
-		right_mg.move(fast_power);
+	while (pros::millis() - start < 500) {
+		left_mg.move(25);
+		right_mg.move(127);
 		pros::delay(20);
 	}
 
 	// turn right: mirrored, left group fast, right group slow
 	start = pros::millis();
-	while (pros::millis() - start < wiggle_time) {
-		left_mg.move(fast_power);
-		right_mg.move(slow_power);
+	while (pros::millis() - start < 250) {
+		left_mg.move(-25);
+		right_mg.move(-127);
 		pros::delay(20);
 	}
+
+	start = pros::millis();
+	while (pros::millis() - start < 400) {
+		left_mg.move(127);
+		right_mg.move(25);
+		pros::delay(20);
+	}
+
 
 	left_mg.move(0);
 	right_mg.move(0);
@@ -127,12 +138,7 @@ void autonomous() {
  * task, not resume it from where it left off.
  */
 void opcontrol() {
-	pros::Controller master(pros::E_CONTROLLER_MASTER);
-	pros::Motor intake(11, pros::v5::MotorGears::green);
-	pros::MotorGroup lift({3, -8}, pros::v5::MotorGears::green);
-	pros::Motor arm(7, pros::v5::MotorGears::green);
-	pros::Motor holder(6, pros::v5::MotorGears::green);
-	pros::Rotation lift_rotation(5);
+	
 	constexpr double lift_min = 0;
 	constexpr double lift_max = 9.89 * 360 * 100;
 	constexpr double arm_start = 0.0;
@@ -180,7 +186,7 @@ void opcontrol() {
 		int turn = master.get_analog(ANALOG_RIGHT_X);
 		// desaturateBias favors turning authority over throttle when motors would otherwise saturate,
 		// so turning stays responsive even at high forward/backward speed
-		chassis.arcade(dir, turn, false, 0.75);
+		chassis.arcade(dir, turn, false, 0.5);
 
 		if (master.get_digital(pros::E_CONTROLLER_DIGITAL_R2)) {
 			intake.move(127);
