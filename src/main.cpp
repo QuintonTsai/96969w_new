@@ -5,7 +5,7 @@ pros::MotorGroup left_mg({-9, -10}, pros::v5::MotorGears::blue);
 pros::MotorGroup right_mg({1, 2}, pros::v5::MotorGears::blue);
 pros::Imu imu(19);
 pros::Controller master(pros::E_CONTROLLER_MASTER);
-pros::Motor intake(11, pros::v5::MotorGears::green);
+pros::Motor intake(11, pros::v5::MotorGears::blue);
 pros::MotorGroup lift({3, -8}, pros::v5::MotorGears::green);
 pros::Motor arm(7, pros::v5::MotorGears::green);
 pros::Motor holder(6, pros::v5::MotorGears::green);
@@ -28,7 +28,7 @@ lemlib::ControllerSettings lateral_controller(10, // proportional gain (kP)
                                                1, // small error range, in inches
                                                100, // small error range timeout, in ms
                                                3, // large error range, in inches
-                                               500, // large error range timeout, in ms
+                                               200, // large error range timeout, in ms
                                                20); // maximum acceleration (slew)
 
 lemlib::ControllerSettings angular_controller(2, // proportional gain (kP)
@@ -38,7 +38,7 @@ lemlib::ControllerSettings angular_controller(2, // proportional gain (kP)
                                                1, // small error range, in degrees
                                                100, // small error range timeout, in ms
                                                3, // large error range, in degrees
-                                               500, // large error range timeout, in ms
+                                               200, // large error range timeout, in ms
                                                0); // maximum acceleration (slew)
 
 // input curve for throttle input during driver control
@@ -61,6 +61,10 @@ lemlib::Chassis chassis(drivetrain, lateral_controller, angular_controller, sens
  */
 void initialize() {
 	pros::lcd::initialize();
+	// zero once at program start (arm and lift down) so auton and driver control share the same reference
+	lift.tare_position();
+	lift_rotation.reset_position();
+	arm.tare_position();
 	chassis.calibrate();
 }
 
@@ -94,34 +98,79 @@ void competition_initialize() {}
  * from where it left off.
  */
 void autonomous() {
+	holder.move(127);
 
-
-	// turn left: right group fast, left group slow
+	// curve right: left side fast, right side slow
 	int64_t start = pros::millis();
 	while (pros::millis() - start < 500) {
-		left_mg.move(25);
-		right_mg.move(127);
+		right_mg.move(25);
+		left_mg.move(127);
 		pros::delay(20);
 	}
 
-	// turn right: mirrored, left group fast, right group slow
+	// back up while curving: both sides reverse, left side faster
 	start = pros::millis();
 	while (pros::millis() - start < 250) {
-		left_mg.move(-25);
-		right_mg.move(-127);
+		right_mg.move(-25);
+		left_mg.move(-127);
 		pros::delay(20);
 	}
 
+	// curve left: right side fast, left side slow
 	start = pros::millis();
 	while (pros::millis() - start < 400) {
-		left_mg.move(127);
-		right_mg.move(25);
+		right_mg.move(127);
+		left_mg.move(25);
 		pros::delay(20);
 	}
-
 
 	left_mg.move(0);
 	right_mg.move(0);
+	pros::delay(100); // drive coasts, so let it settle before reading heading
+
+	// turn left 60 degrees relative to current heading (LemLib heading is clockwise-positive)
+	chassis.turnToHeading(chassis.getPose().theta - 60, 1500);
+	chassis.waitUntilDone();
+
+	arm.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+	double arm_target = arm.get_position() + 1500;
+	arm.move_absolute(arm_target, 200);
+	int64_t arm_start_ms = pros::millis();
+
+	// drive backward 70 cm along current heading while the arm raises (LemLib works in inches)
+	const float reverse_in = 70.0 / 2.54;
+	lemlib::Pose pose = chassis.getPose();
+	float heading_rad = lemlib::degToRad(pose.theta);
+	chassis.moveToPoint(pose.x - reverse_in * std::sin(heading_rad),
+	                    pose.y - reverse_in * std::cos(heading_rad), 2000, {.forwards = false});
+	chassis.waitUntilDone();
+
+	// holder release needs the arm up, so finish the raise before releasing
+	while (std::abs(arm.get_position() - arm_target) > 20 && pros::millis() - arm_start_ms < 3000) {
+		pros::delay(20);
+	}
+
+	holder.move(-127);
+	pros::delay(300);
+	holder.move(0);
+
+	arm_target = 1800;
+	arm.move_absolute(arm_target, 200);
+	arm_start_ms = pros::millis();
+
+	// turn while the arm raises to 1800
+	start = pros::millis();
+	while (pros::millis() - start < 450) {
+		right_mg.move(15);
+		left_mg.move(127);
+		pros::delay(20);
+	}
+	right_mg.move(0);
+	left_mg.move(0);
+
+	while (std::abs(arm.get_position() - arm_target) > 20 && pros::millis() - arm_start_ms < 3000) {
+		pros::delay(20);
+	}
 }
 
 /**
@@ -142,6 +191,8 @@ void opcontrol() {
 	constexpr double lift_min = 0;
 	constexpr double lift_max = 9.89 * 360 * 100;
 	constexpr double arm_start = 0.0;
+	constexpr double arm_min = 0.0;
+	constexpr double arm_max = 3000.0;
 	constexpr double arm_out_position = 2400.0;
 	constexpr double arm_release_clear = 2700.0;
 	constexpr int64_t lift_macro_delay_ms = 150;
@@ -152,15 +203,13 @@ void opcontrol() {
 	const int holder_release_speed = -127;
 	arm.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
 	holder.set_brake_mode(pros::E_MOTOR_BRAKE_COAST);
-	lift.tare_position();
-	lift_rotation.reset_position();
-	arm.tare_position();
-	double lift_target = lift_min;
+	double lift_target = lift.get_position();
 	enum class ArmMacroState {
 		IDLE,
 		LIFT_UP,
 		ARM_OUT,
-		ARM_RETURN
+		ARM_RETURN,
+		LIFT_DOWN
 	};
 	enum class ReleaseMacroState {
 		INACTIVE,
@@ -190,7 +239,7 @@ void opcontrol() {
 
 		if (master.get_digital(pros::E_CONTROLLER_DIGITAL_R2)) {
 			intake.move(127);
-		} else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_X)) {
+		} else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_Y)) {
 			intake.move(-127);
 		} else {
 			intake.move(0);
@@ -204,7 +253,7 @@ void opcontrol() {
 					macro_state_start_ms = pros::millis();
 					arm_extended = true;
 				} else {
-					arm_macro_state = ArmMacroState::ARM_RETURN;
+					arm_macro_state = ArmMacroState::LIFT_DOWN;
 					macro_state_start_ms = pros::millis();
 					arm_extended = false;
 				}
@@ -270,8 +319,25 @@ void opcontrol() {
 				arm.move_absolute(arm_start, 200);
 				arm_macro_state = ArmMacroState::IDLE;
 			}
+		} else if (arm_macro_state == ArmMacroState::LIFT_DOWN) {
+			holder.move(holder_default_speed);
+			if (pros::millis() - macro_state_start_ms >= lift_macro_delay_ms || lift_position <= lift_min) {
+				lift_target = lift_motor_position;
+				lift.move_absolute(lift_target, 100);
+				arm_macro_state = ArmMacroState::ARM_RETURN;
+				macro_state_start_ms = pros::millis();
+			} else {
+				lift.move(-127);
+			}
 		} else {
-			arm.move(0);
+			double arm_position = arm.get_position();
+			if (master.get_digital(pros::E_CONTROLLER_DIGITAL_X) && arm_position < arm_max) {
+				arm.move(127);
+			} else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_A) && arm_position > arm_min) {
+				arm.move(-127);
+			} else {
+				arm.move(0);
+			}
 			if (holder_macro_active) {
 				holder.move(holder_macro_speed);
 			} else {
