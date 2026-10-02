@@ -100,7 +100,7 @@ void competition_initialize() {}
 void autonomous() {
 	holder.move(127);
 
-	// curve right: left side fast, right side slow
+	// arc right
 	int64_t start = pros::millis();
 	while (pros::millis() - start < 500) {
 		right_mg.move(25);
@@ -108,7 +108,7 @@ void autonomous() {
 		pros::delay(20);
 	}
 
-	// back up while curving: both sides reverse, left side faster
+	// arc left backward
 	start = pros::millis();
 	while (pros::millis() - start < 250) {
 		right_mg.move(-25);
@@ -116,7 +116,7 @@ void autonomous() {
 		pros::delay(20);
 	}
 
-	// curve left: right side fast, left side slow
+	// arc left
 	start = pros::millis();
 	while (pros::millis() - start < 400) {
 		right_mg.move(127);
@@ -124,28 +124,29 @@ void autonomous() {
 		pros::delay(20);
 	}
 
+	// drive coasts, so let it settle before reading heading
 	left_mg.move(0);
 	right_mg.move(0);
-	pros::delay(100); // drive coasts, so let it settle before reading heading
+	pros::delay(100); 
 
-	// turn left 60 degrees relative to current heading (LemLib heading is clockwise-positive)
-	chassis.turnToHeading(chassis.getPose().theta - 60, 1500);
+	// turn left
+	chassis.turnToHeading(chassis.getPose().theta - 80, 1500);
 	chassis.waitUntilDone();
 
 	arm.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
-	double arm_target = arm.get_position() + 1500;
+	double arm_target = arm.get_position() + 1700;
 	arm.move_absolute(arm_target, 200);
 	int64_t arm_start_ms = pros::millis();
 
-	// drive backward 70 cm along current heading while the arm raises (LemLib works in inches)
-	const float reverse_in = 70.0 / 2.54;
+	// reverse
+	const float reverse_in = 30.0 / 2.54;
 	lemlib::Pose pose = chassis.getPose();
 	float heading_rad = lemlib::degToRad(pose.theta);
 	chassis.moveToPoint(pose.x - reverse_in * std::sin(heading_rad),
 	                    pose.y - reverse_in * std::cos(heading_rad), 2000, {.forwards = false});
 	chassis.waitUntilDone();
 
-	// holder release needs the arm up, so finish the raise before releasing
+	// wait
 	while (std::abs(arm.get_position() - arm_target) > 20 && pros::millis() - arm_start_ms < 3000) {
 		pros::delay(20);
 	}
@@ -158,19 +159,55 @@ void autonomous() {
 	arm.move_absolute(arm_target, 200);
 	arm_start_ms = pros::millis();
 
-	// turn while the arm raises to 1800
+	// arc right
 	start = pros::millis();
-	while (pros::millis() - start < 450) {
+	while (pros::millis() - start < 350) {
 		right_mg.move(15);
 		left_mg.move(127);
 		pros::delay(20);
 	}
-	right_mg.move(0);
-	left_mg.move(0);
 
 	while (std::abs(arm.get_position() - arm_target) > 20 && pros::millis() - arm_start_ms < 3000) {
 		pros::delay(20);
 	}
+
+	start = pros::millis();
+	while (pros::millis() - start < 50) {
+		right_mg.move(-127);
+		left_mg.move(127);
+		pros::delay(20);
+	}
+
+	right_mg.move(0);
+	left_mg.move(0);
+
+	lemlib::Pose drive_start_pose = chassis.getPose();
+	const float target_distance_in = 50.0f / 2.54f;
+	start = pros::millis();
+	while (pros::millis() - start < 8000) {
+		lemlib::Pose current_pose = chassis.getPose();
+		float delta_x = current_pose.x - drive_start_pose.x;
+		float delta_y = current_pose.y - drive_start_pose.y;
+		if (std::sqrt(delta_x * delta_x + delta_y * delta_y) >= target_distance_in) {
+			break;
+		}
+		left_mg.move(-127);
+		right_mg.move(-20);
+		pros::delay(20);
+	}
+	left_mg.move(0);
+	right_mg.move(0);
+
+	start = pros::millis();
+	while (lift_rotation.get_position() > 0 && pros::millis() - start < 3000) {
+		lift.move(-127);
+		pros::delay(20);
+	}
+	lift.move(0);
+
+	holder.move(127);
+	pros::delay(300);
+	holder.move(0);
 }
 
 /**
