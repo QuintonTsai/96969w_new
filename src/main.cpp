@@ -98,10 +98,18 @@ void competition_initialize() {}
  * from where it left off.
  */
 void autonomous() {
+
 	holder.move(127);
 
 	// arc right
 	int64_t start = pros::millis();
+	while (pros::millis() - start < 100) {
+		right_mg.move(-127);
+		left_mg.move(-127);
+		pros::delay(20);
+	}
+
+	start = pros::millis();
 	while (pros::millis() - start < 500) {
 		right_mg.move(25);
 		left_mg.move(127);
@@ -129,17 +137,17 @@ void autonomous() {
 	right_mg.move(0);
 	pros::delay(100); 
 
-	// turn left
+	// turn left  degrees
 	chassis.turnToHeading(chassis.getPose().theta - 80, 1500);
 	chassis.waitUntilDone();
 
 	arm.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
-	double arm_target = arm.get_position() + 1700;
+	double arm_target = arm.get_position() + 1500;
 	arm.move_absolute(arm_target, 200);
 	int64_t arm_start_ms = pros::millis();
 
 	// reverse
-	const float reverse_in = 30.0 / 2.54;
+	const float reverse_in = 65 / 2.54;
 	lemlib::Pose pose = chassis.getPose();
 	float heading_rad = lemlib::degToRad(pose.theta);
 	chassis.moveToPoint(pose.x - reverse_in * std::sin(heading_rad),
@@ -151,6 +159,7 @@ void autonomous() {
 		pros::delay(20);
 	}
 
+	pros::delay(300);
 	holder.move(-127);
 	pros::delay(300);
 	holder.move(0);
@@ -161,7 +170,7 @@ void autonomous() {
 
 	// arc right
 	start = pros::millis();
-	while (pros::millis() - start < 350) {
+	while (pros::millis() - start < 300) {
 		right_mg.move(15);
 		left_mg.move(127);
 		pros::delay(20);
@@ -182,7 +191,7 @@ void autonomous() {
 	left_mg.move(0);
 
 	lemlib::Pose drive_start_pose = chassis.getPose();
-	const float target_distance_in = 50.0f / 2.54f;
+	const float target_distance_in = 55.00f / 2.54f;
 	start = pros::millis();
 	while (pros::millis() - start < 8000) {
 		lemlib::Pose current_pose = chassis.getPose();
@@ -192,7 +201,7 @@ void autonomous() {
 			break;
 		}
 		left_mg.move(-127);
-		right_mg.move(-20);
+		right_mg.move(-70);
 		pros::delay(20);
 	}
 	left_mg.move(0);
@@ -208,6 +217,10 @@ void autonomous() {
 	holder.move(127);
 	pros::delay(300);
 	holder.move(0);
+
+	// turn left 135 degrees at the end of auton
+	chassis.turnToHeading(chassis.getPose().theta - 160, 1500);
+	chassis.waitUntilDone();
 }
 
 /**
