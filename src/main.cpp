@@ -191,7 +191,8 @@ void autonomous() {
 	left_mg.move(0);
 
 	lemlib::Pose drive_start_pose = chassis.getPose();
-	const float target_distance_in = 55.00f / 2.54f;
+	const float target_distance_in = 70.00f / 2.54f;
+	//const float target_distance_in = 55.00f / 2.54f;
 	start = pros::millis();
 	while (pros::millis() - start < 8000) {
 		lemlib::Pose current_pose = chassis.getPose();
@@ -201,12 +202,13 @@ void autonomous() {
 			break;
 		}
 		left_mg.move(-127);
-		right_mg.move(-70);
+		right_mg.move(-127);
+		//right_mg.move(-70);
 		pros::delay(20);
 	}
 	left_mg.move(0);
 	right_mg.move(0);
-
+    /*
 	start = pros::millis();
 	while (lift_rotation.get_position() > 0 && pros::millis() - start < 3000) {
 		lift.move(-127);
@@ -221,6 +223,18 @@ void autonomous() {
 	// turn left 135 degrees at the end of auton
 	chassis.turnToHeading(chassis.getPose().theta - 160, 1500);
 	chassis.waitUntilDone();
+
+	arm_start_ms = pros::millis();
+	while (arm.get_position() > 3 && pros::millis() - arm_start_ms < 3000) {
+		arm.move(-127);
+		pros::delay(20);
+	}
+	arm.move(0);
+	if (arm.get_position() <= 3) {
+		arm.tare_position();
+	}*/
+	left_mg.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+	right_mg.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
 }
 
 /**
@@ -237,6 +251,8 @@ void autonomous() {
  * task, not resume it from where it left off.
  */
 void opcontrol() {
+	left_mg.set_brake_mode(pros::E_MOTOR_BRAKE_COAST);
+	right_mg.set_brake_mode(pros::E_MOTOR_BRAKE_COAST);
 	
 	constexpr double lift_min = 0;
 	constexpr double lift_max = 9.89 * 360 * 100;
