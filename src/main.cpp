@@ -75,6 +75,7 @@ void initialize() {
 			pros::lcd::print(1, "X: %.1f cm", pose.x * 2.54);
 			pros::lcd::print(2, "Y: %.1f cm", pose.y * 2.54);
 			pros::lcd::print(3, "Theta: %.1f deg", pose.theta);
+			pros::lcd::print(4, "Arm: %.0f", arm.get_position());
 			pros::delay(50);
 		}
 	});
@@ -270,23 +271,24 @@ void timed_autonomous() {
 
 }
 
-// pose offset from the robot's current pose, in the robot's own frame; distances in cm
+// pose offset from the robot's current position, in the frame of heading_deg; distances in cm
+// early-exited motions leave the robot a few degrees off, so callers pass the heading it was aiming for
 // LemLib heading is clockwise from +Y, so forward is (sin, cos) and right is (cos, -sin)
-lemlib::Pose relativePose(float forward_cm, float right_cm, float turn_deg) {
+lemlib::Pose relativePose(float heading_deg, float forward_cm, float right_cm, float turn_deg) {
 	// LemLib works in inches
 	float forward_in = forward_cm / 2.54f;
 	float right_in = right_cm / 2.54f;
 	lemlib::Pose pose = chassis.getPose();
-	float heading_rad = lemlib::degToRad(pose.theta);
+	float heading_rad = lemlib::degToRad(heading_deg);
 	return lemlib::Pose(pose.x + forward_in * std::sin(heading_rad) + right_in * std::cos(heading_rad),
 	                    pose.y + forward_in * std::cos(heading_rad) - right_in * std::sin(heading_rad),
-	                    pose.theta + turn_deg);
+	                    heading_deg + turn_deg);
 }
 
-// drive straight along the current heading; distances in cm, negative distance drives backward
+// drive straight along heading_deg; distances in cm, negative distance drives backward
 // min_speed + early_exit_cm let the robot carry speed into the next motion instead of stopping
-void driveRelative(float distance_cm, int timeout, float max_speed = 127, float min_speed = 0, float early_exit_cm = 0) {
-	lemlib::Pose target = relativePose(distance_cm, 0, 0);
+void driveRelative(float heading_deg, float distance_cm, int timeout, float max_speed = 127, float min_speed = 0, float early_exit_cm = 0) {
+	lemlib::Pose target = relativePose(heading_deg, distance_cm, 0, 0);
 	chassis.moveToPoint(target.x, target.y, timeout,
 	                    {.forwards = distance_cm >= 0, .maxSpeed = max_speed, .minSpeed = min_speed,
 	                     .earlyExitRange = early_exit_cm / 2.54f});
@@ -295,6 +297,9 @@ void driveRelative(float distance_cm, int timeout, float max_speed = 127, float 
 // values marked TUNE were estimated from the old timed version; measure them with the pose display
 void autonomous() {
 	chassis.setPose(0, 0, 0);
+	// the arm is fully down at the start of every match, so re-zero it here; the zero from initialize()
+	// is off if the program was started with the arm raised, which shifts every absolute arm target up
+	arm.tare_position();
 	// hold so each motion stops where LemLib ends it instead of coasting into the next one
 	left_mg.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
 	right_mg.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
@@ -305,7 +310,7 @@ void autonomous() {
 	float target_heading = 0;
 
 	// short back up (was 100 ms full reverse)
-	driveRelative(-5, 500, 127, 80, 2.5); // TUNE distance
+	driveRelative(target_heading, -5, 500, 127, 80, 2.5); // TUNE distance
 	chassis.waitUntilDone();
 
 	// arc right forward, pivoting on the right side (was 500 ms at left 127 / right 25)
@@ -326,13 +331,13 @@ void autonomous() {
 	chassis.waitUntilDone();
 
 	// backward, forward, backward; each exits early at speed like the opening back up
-	/*driveRelative(15, 500, 127, 127, 2.5); // TUNE distance
+	/*driveRelative(target_heading, 15, 500, 127, 127, 2.5); // TUNE distance
 	chassis.waitUntilDone();
 
-	driveRelative(-15, 500, 127, 80, 2.5); // TUNE distance
+	driveRelative(target_heading, -15, 500, 127, 80, 2.5); // TUNE distance
 	chassis.waitUntilDone();
 
-	driveRelative(15, 500, 127, 127, 2.5); // TUNE distance
+	driveRelative(target_heading, 15, 500, 127, 127, 2.5); // TUNE distance
 	chassis.waitUntilDone();
     */
 	// turn left 80 degrees (the arcs used to contribute 30 of this); this one stops precisely
@@ -347,7 +352,7 @@ void autonomous() {
 	int64_t arm_start_ms = pros::millis();
 
 	// reverse 65 cm
-	driveRelative(-65, 2000);
+	driveRelative(target_heading, -65, 2000);
 	chassis.waitUntilDone();
 
 	// wait
@@ -360,24 +365,42 @@ void autonomous() {
 	pros::delay(300);
 	holder.move(0);
 
-	arm_target = 2400;
+	arm_target = 2100;
 	arm.move_absolute(arm_target, 200);
 	arm_start_ms = pros::millis();
 
-	// arc right forward, pivoting on the right side (was 300 ms arc + 50 ms spin right)
-	chassis.swingToHeading(chassis.getPose().theta + 80, lemlib::DriveSide::RIGHT, 1000, // TUNE angle
-	                       {.direction = lemlib::AngularDirection::CW_CLOCKWISE});
+	// forward, turn, backward; replaces a swing right 80 (right side locked) followed by a backward
+	// curve 46 cm back, 27 cm right, 60 left, which together end 19.9 cm back and 28.3 cm left
+	// of here, facing 20 right. turning 30 right makes that forward 29.1 cm then back 56.6 cm
+	// both targets come from this pose up front, so early exits along the way don't shift the end point
+	// extra_back_cm extends the back up past that point along the same 30 degree line
+	const float extra_back_cm = 10; // TUNE distance
+	const float back_line_rad = lemlib::degToRad(30);
+	lemlib::Pose forward_target = relativePose(target_heading, 29.1, 0, 0);
+	lemlib::Pose backward_target = relativePose(target_heading,
+	                                            -19.9 - extra_back_cm * std::cos(back_line_rad),
+	                                            -28.3 - extra_back_cm * std::sin(back_line_rad), 30);
+
+	chassis.moveToPoint(forward_target.x, forward_target.y, 1000,
+	                    {.forwards = true, .minSpeed = 127, .earlyExitRange = 2.5f / 2.54f});
+	chassis.waitUntilDone();
+
+	// point the back of the robot at the end point (30 right)
+	chassis.turnToPoint(backward_target.x, backward_target.y, 1000,
+	                    {.forwards = false, .minSpeed = 127, .earlyExitRange = 10});
 	chassis.waitUntilDone();
 
 	while (std::abs(arm.get_position() - arm_target) > 20 && pros::millis() - arm_start_ms < 3000) {
 		pros::delay(20);
 	}
 
-	// curve backward to the left (was left -127 / right -70 until 55 cm traveled):
-	// ends about 46 cm back, 27 cm to the right, turned 60 degrees left
-	lemlib::Pose curve_target = relativePose(-46, 27, -60); // TUNE
-	chassis.moveToPose(curve_target.x, curve_target.y, curve_target.theta, 2500, {.forwards = false});
+	chassis.moveToPoint(backward_target.x, backward_target.y, 2000,
+	                    {.forwards = false, .minSpeed = 127, .earlyExitRange = 2.54f / 2.54f});
 	chassis.waitUntilDone();
+
+	// the robot now faces 30 right instead of the old 20, but keep the old heading so the
+	// 160 turn below still lands on the same absolute heading (it turns 170 instead)
+	target_heading = backward_target.theta;
 
 	holder.move(127);
 
@@ -397,11 +420,12 @@ void autonomous() {
 	holder.move(0);
 
 	// turn left 160 degrees
-	chassis.turnToHeading(chassis.getPose().theta - 160, 1500);
+	target_heading -= 170;
+	chassis.turnToHeading(target_heading, 1500, {.minSpeed = 127, .earlyExitRange = 10});
 	chassis.waitUntilDone();
 
 	// drive backward (was 1.5 s full reverse); the timeout still ends it if the robot is pushing against something
-	driveRelative(-51, 1500); // TUNE distance
+	driveRelative(target_heading, -51, 1500, 127, 80, 2.5); // TUNE distance
 	chassis.waitUntilDone();
 
 	while (std::abs(arm.get_position() - arm_target) > 20 && pros::millis() - arm_start_ms < 3000) {
