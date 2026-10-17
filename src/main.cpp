@@ -10,6 +10,52 @@ pros::MotorGroup lift({3, -8}, pros::v5::MotorGears::green);
 pros::Motor arm(7, pros::v5::MotorGears::green);
 pros::Motor holder(6, pros::v5::MotorGears::green);
 pros::Rotation lift_rotation(5);
+// reversed so the angle counts up as the arm raises, the same direction as the arm motor
+pros::Rotation arm_rotation(-12);
+
+// the arm sensor reads 100 degrees where the arm motor read 2700, so the motor turns 27 degrees per arm degree
+constexpr double arm_motor_deg_per_deg = 27.0;
+
+// arm angle from the rotation sensor, in degrees (get_position is in centidegrees)
+double arm_angle() {
+	return arm_rotation.get_position() / 100.0;
+}
+
+// last target sent by arm_move_to, as an arm angle and as the matching motor position
+double arm_target_angle = 0;
+double arm_motor_target = 0;
+int64_t arm_move_last_ms = 0;
+
+// move the arm to an absolute sensor angle; the motor's own PID does the moving, but the target is
+// measured from the sensor so slop or slip between the motor and the arm doesn't shift it
+// the motor target is only measured at the start of a move (new angle, or no call in the last 100 ms);
+// re-measuring it every loop sends a slightly different target each time, which restarts the motor's
+// speed ramp and leaves the arm crawling
+void arm_move_to(double angle_deg, int velocity) {
+	if (angle_deg != arm_target_angle || pros::millis() - arm_move_last_ms > 100) {
+		arm_target_angle = angle_deg;
+		arm_motor_target = arm.get_position() + (angle_deg - arm_angle()) * arm_motor_deg_per_deg;
+	}
+	arm_move_last_ms = pros::millis();
+	arm.move_absolute(arm_motor_target, velocity);
+}
+
+// true once the arm is within 0.75 degrees of the arm_move_to target, or the motor has reached the
+// position it was sent to (slop can leave the sensor a little short even then)
+bool arm_settled() {
+	return std::abs(arm_angle() - arm_target_angle) <= 0.75 || std::abs(arm.get_position() - arm_motor_target) <= 20;
+}
+
+// wait until the arm reaches angle_deg or timeout_ms has passed since start_ms
+void arm_wait(double angle_deg, int velocity, int64_t start_ms, int64_t timeout_ms = 3000) {
+	while (pros::millis() - start_ms < timeout_ms) {
+		arm_move_to(angle_deg, velocity);
+		if (arm_settled()) {
+			break;
+		}
+		pros::delay(20);
+	}
+}
 
 lemlib::Drivetrain drivetrain(&left_mg, &right_mg,
                                11.75, // track width, in inches
@@ -20,25 +66,26 @@ lemlib::Drivetrain drivetrain(&left_mg, &right_mg,
 // no tracking wheels; odometry falls back to drive motor encoders + IMU
 lemlib::OdomSensors sensors(nullptr, nullptr, nullptr, nullptr, &imu);
 
-// PID constants below are starting points from LemLib's example project — tune them for this robot
-lemlib::ControllerSettings lateral_controller(10, // proportional gain (kP)
+// PID constants below are copied from the LemLib-stable project's tuned drivetrain (same motors, wheels and rpm);
+// this robot's weight and track width differ, so fine-tune from here
+lemlib::ControllerSettings lateral_controller(8.2, // proportional gain (kP)
                                                0, // integral gain (kI)
-                                               3, // derivative gain (kD)
+                                               35, // derivative gain (kD)
                                                3, // integral anti windup range
                                                1, // small error range, in inches
                                                100, // small error range timeout, in ms
                                                3, // large error range, in inches
-                                               200, // large error range timeout, in ms
+                                               500, // large error range timeout, in ms
                                                20); // maximum acceleration (slew)
 
-lemlib::ControllerSettings angular_controller(5, // proportional gain (kP), raised from 2 so turns hold speed closer to the target
-                                               0, // integral gain (kI)
-                                               10, // derivative gain (kD)
+lemlib::ControllerSettings angular_controller(2.12, // proportional gain (kP)
+                                               0.082, // integral gain (kI)
+                                               12, // derivative gain (kD)
                                                3, // integral anti windup range
                                                1, // small error range, in degrees
                                                100, // small error range timeout, in ms
                                                3, // large error range, in degrees
-                                               200, // large error range timeout, in ms
+                                               500, // large error range timeout, in ms
                                                0); // maximum acceleration (slew)
 
 // input curve for throttle input during driver control
@@ -64,7 +111,7 @@ void initialize() {
 	// zero once at program start (arm and lift down) so auton and driver control share the same reference
 	lift.tare_position();
 	lift_rotation.reset_position();
-	arm.tare_position();
+	arm_rotation.reset_position();
 	chassis.calibrate();
 
 	// show the odometry pose on the brain screen, used to measure/tune auton targets
@@ -75,7 +122,7 @@ void initialize() {
 			pros::lcd::print(1, "X: %.1f cm", pose.x * 2.54);
 			pros::lcd::print(2, "Y: %.1f cm", pose.y * 2.54);
 			pros::lcd::print(3, "Theta: %.1f deg", pose.theta);
-			pros::lcd::print(4, "Arm: %.0f", arm.get_position());
+			pros::lcd::print(4, "Arm: %.1f deg", arm_angle());
 			pros::delay(50);
 		}
 	});
@@ -156,8 +203,8 @@ void timed_autonomous() {
 	chassis.waitUntilDone();
 
 	arm.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
-	double arm_target = arm.get_position() + 1500;
-	arm.move_absolute(arm_target, 200);
+	double arm_target = arm_angle() + 55.6;
+	arm_move_to(arm_target, 200);
 	int64_t arm_start_ms = pros::millis();
 
 	// reverse
@@ -169,17 +216,15 @@ void timed_autonomous() {
 	chassis.waitUntilDone();
 
 	// wait
-	while (std::abs(arm.get_position() - arm_target) > 20 && pros::millis() - arm_start_ms < 3000) {
-		pros::delay(20);
-	}
+	arm_wait(arm_target, 200, arm_start_ms);
 
 	pros::delay(300);
 	holder.move(-127);
 	pros::delay(300);
 	holder.move(0);
 
-	arm_target = 2400;
-	arm.move_absolute(arm_target, 200);
+	arm_target = 88.9;
+	arm_move_to(arm_target, 200);
 	arm_start_ms = pros::millis();
 
 	// arc right
@@ -190,9 +235,7 @@ void timed_autonomous() {
 		pros::delay(20);
 	}
 
-	while (std::abs(arm.get_position() - arm_target) > 20 && pros::millis() - arm_start_ms < 3000) {
-		pros::delay(20);
-	}
+	arm_wait(arm_target, 200, arm_start_ms);
 
 	start = pros::millis();
 	while (pros::millis() - start < 50) {
@@ -227,17 +270,15 @@ void timed_autonomous() {
     
 	holder.move(127);
 
-	arm_target = 1500;
-	arm.move_absolute(arm_target, 200);
+	arm_target = 55.6;
+	arm_move_to(arm_target, 200);
 	arm_start_ms = pros::millis();
 
-	while (std::abs(arm.get_position() - arm_target) > 20 && pros::millis() - arm_start_ms < 3000) {
-		pros::delay(20);
-	}
+	arm_wait(arm_target, 200, arm_start_ms);
 
 	// raise arm while turning
-	arm_target = 2400;
-	arm.move_absolute(arm_target, 200);
+	arm_target = 88.9;
+	arm_move_to(arm_target, 200);
 	arm_start_ms = pros::millis();
 
 	// turn left 135 degrees at the end of auton
@@ -254,9 +295,7 @@ void timed_autonomous() {
 	left_mg.move(0);
 	right_mg.move(0);
 
-	while (std::abs(arm.get_position() - arm_target) > 20 && pros::millis() - arm_start_ms < 3000) {
-		pros::delay(20);
-	}
+	arm_wait(arm_target, 200, arm_start_ms);
 
 	arm_start_ms = pros::millis();
 	while (pros::millis() - arm_start_ms < 1000) {
@@ -299,7 +338,7 @@ void autonomous() {
 	chassis.setPose(0, 0, 0);
 	// the arm is fully down at the start of every match, so re-zero it here; the zero from initialize()
 	// is off if the program was started with the arm raised, which shifts every absolute arm target up
-	arm.tare_position();
+	arm_rotation.reset_position();
 	// hold so each motion stops where LemLib ends it instead of coasting into the next one
 	left_mg.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
 	right_mg.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
@@ -347,8 +386,8 @@ void autonomous() {
 	chassis.waitUntilDone();
 
 	arm.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
-	double arm_target = arm.get_position() + 1500;
-	arm.move_absolute(arm_target, 200);
+	double arm_target = arm_angle() + 55.6;
+	arm_move_to(arm_target, 200);
 	int64_t arm_start_ms = pros::millis();
 
 	// reverse 65 cm
@@ -356,17 +395,15 @@ void autonomous() {
 	chassis.waitUntilDone();
 
 	// wait
-	while (std::abs(arm.get_position() - arm_target) > 20 && pros::millis() - arm_start_ms < 3000) {
-		pros::delay(20);
-	}
+	arm_wait(arm_target, 200, arm_start_ms);
 
 	pros::delay(300);
 	holder.move(-127);
 	pros::delay(300);
 	holder.move(0);
 
-	arm_target = 2100;
-	arm.move_absolute(arm_target, 200);
+	arm_target = 105;
+	arm_move_to(arm_target, 200);
 	arm_start_ms = pros::millis();
 
 	// forward, turn, backward; replaces a swing right 80 (right side locked) followed by a backward
@@ -390,9 +427,7 @@ void autonomous() {
 	                    {.forwards = false, .minSpeed = 127, .earlyExitRange = 10});
 	chassis.waitUntilDone();
 
-	while (std::abs(arm.get_position() - arm_target) > 20 && pros::millis() - arm_start_ms < 3000) {
-		pros::delay(20);
-	}
+	arm_wait(arm_target, 200, arm_start_ms);
 
 	chassis.moveToPoint(backward_target.x, backward_target.y, 2000,
 	                    {.forwards = false, .minSpeed = 127, .earlyExitRange = 2.54f / 2.54f});
@@ -404,23 +439,21 @@ void autonomous() {
 
 	holder.move(127);
 
-	arm_target = 1500;
-	arm.move_absolute(arm_target, 200);
+	arm_target = 55.6;
+	arm_move_to(arm_target, 200);
 	arm_start_ms = pros::millis();
 
-	while (std::abs(arm.get_position() - arm_target) > 20 && pros::millis() - arm_start_ms < 3000) {
-		pros::delay(20);
-	}
-
+	arm_wait(arm_target, 200, arm_start_ms);
+	pros::delay(150);
 	// raise arm while turning
-	arm_target = 2400;
-	arm.move_absolute(arm_target, 200);
+	arm_target = 88.9;
+	arm_move_to(arm_target, 200);
 	arm_start_ms = pros::millis();
 
 	holder.move(0);
 
 	// turn left 160 degrees
-	target_heading -= 170;
+	target_heading -= 150;
 	chassis.turnToHeading(target_heading, 1500, {.minSpeed = 127, .earlyExitRange = 10});
 	chassis.waitUntilDone();
 
@@ -428,18 +461,14 @@ void autonomous() {
 	driveRelative(target_heading, -51, 1500, 127, 80, 2.5); // TUNE distance
 	chassis.waitUntilDone();
 
-	while (std::abs(arm.get_position() - arm_target) > 20 && pros::millis() - arm_start_ms < 3000) {
-		pros::delay(20);
-	}
+	arm_wait(arm_target, 200, arm_start_ms);
 
-	// lower the arm (was 1 s at full reverse, roughly 1200 degrees of travel from 2400)
-	arm_target = 1200; // TUNE angle
-	arm.move_absolute(arm_target, 200);
+	// lower the arm (was 1 s at full reverse, roughly 44 degrees of travel from 89)
+	arm_target = 44.4; // TUNE angle
+	arm_move_to(arm_target, 200);
 	arm_start_ms = pros::millis();
 
-	while (std::abs(arm.get_position() - arm_target) > 20 && pros::millis() - arm_start_ms < 3000) {
-		pros::delay(20);
-	}
+	arm_wait(arm_target, 200, arm_start_ms);
 
 	holder.move(-127);
 	pros::delay(300);
@@ -464,17 +493,17 @@ void opcontrol() {
 	// LemLib motions run in their own task, so one still running when auton is cut off would keep
 	// driving the motors and fight the joysticks until it times out
 	chassis.cancelAllMotions();
-	left_mg.set_brake_mode(pros::E_MOTOR_BRAKE_COAST);
-	right_mg.set_brake_mode(pros::E_MOTOR_BRAKE_COAST);
-	
+	left_mg.set_brake_mode(pros::E_MOTOR_BRAKE_BRAKE);
+	right_mg.set_brake_mode(pros::E_MOTOR_BRAKE_BRAKE);
+
 	constexpr double lift_min = 0;
 	constexpr double lift_max = 9.89 * 360 * 100;
 	constexpr double arm_start = 0.0;
 	constexpr double arm_min = 0.0;
-	constexpr double arm_max = 3000.0;
-	constexpr double arm_out_position = 2400.0;
-	constexpr double arm_release_clear = 2700.0;
-	constexpr double arm_release_min = 1500.0;
+	constexpr double arm_max = 111.1;
+	constexpr double arm_out_position = 80;
+	constexpr double arm_release_clear = 100.0;
+	constexpr double arm_release_min = 55.6;
 	constexpr int64_t lift_macro_delay_ms = 150;
 	constexpr int64_t holder_release_time_ms = 250;
 	constexpr int64_t arm_macro_timeout_ms = 3000;
@@ -540,7 +569,7 @@ void opcontrol() {
 
 		bool up_pressed = master.get_digital(pros::E_CONTROLLER_DIGITAL_UP);
 		if (up_pressed && !up_pressed_last && arm_macro_state == ArmMacroState::IDLE &&
-		    release_macro_state == ReleaseMacroState::INACTIVE && arm.get_position() > arm_release_min) {
+		    release_macro_state == ReleaseMacroState::INACTIVE && arm_angle() > arm_release_min) {
 			release_macro_state = ReleaseMacroState::RELEASE_HOLDER;
 			release_start_ms = pros::millis();
 		}
@@ -557,7 +586,7 @@ void opcontrol() {
 			lift.move_absolute(lift_target, 100);
 			if (pros::millis() - release_start_ms >= holder_release_time_ms) {
 				// arm already past the clear height, so skip raising it (would pull it back down)
-				if (arm.get_position() > arm_release_clear) {
+				if (arm_angle() > arm_release_clear) {
 					release_macro_state = ReleaseMacroState::INACTIVE;
 				} else {
 					release_macro_state = ReleaseMacroState::RAISE_CLEAR;
@@ -565,12 +594,12 @@ void opcontrol() {
 				}
 			}
 		} else if (release_macro_state == ReleaseMacroState::RAISE_CLEAR) {
-			arm.move_absolute(arm_release_clear, 200);
+			arm_move_to(arm_release_clear, 200);
 			holder.move(holder_default_speed);
 			lift.move_absolute(lift_target, 100);
-			if (arm.get_position() >= arm_release_clear - 3.0 ||
+			if (arm_settled() ||
 			    pros::millis() - release_start_ms >= arm_macro_timeout_ms) {
-				arm.move_absolute(arm_release_clear, 200);
+				arm_move_to(arm_release_clear, 200);
 				release_macro_state = ReleaseMacroState::INACTIVE;
 			}
 		} else if (arm_macro_state == ArmMacroState::LIFT_UP) {
@@ -582,23 +611,23 @@ void opcontrol() {
 				macro_state_start_ms = pros::millis();
 			}
 		} else if (arm_macro_state == ArmMacroState::ARM_OUT) {
-			arm.move_absolute(arm_out_position, 200);
+			arm_move_to(arm_out_position, 200);
 			lift.move_absolute(lift_target, 100);
-			if (arm.get_position() >= arm_out_position - 3.0 ||
+			if (arm_settled() ||
 			    pros::millis() - macro_state_start_ms >= arm_macro_timeout_ms) {
-				arm.move_absolute(arm_out_position, 200);
+				arm_move_to(arm_out_position, 200);
 				arm_macro_state = ArmMacroState::IDLE;
 				holder.move(holder_default_speed);
 			} else {
 				holder.move(holder_macro_speed);
 			}
 		} else if (arm_macro_state == ArmMacroState::ARM_RETURN) {
-			arm.move_absolute(arm_start, 200);
+			arm_move_to(arm_start, 200);
 			holder.move(holder_default_speed);
 			lift.move_absolute(lift_target, 100);
-			if (arm.get_position() <= arm_start + 3.0 ||
+			if (arm_settled() ||
 			    pros::millis() - macro_state_start_ms >= arm_macro_timeout_ms) {
-				arm.move_absolute(arm_start, 200);
+				arm_move_to(arm_start, 200);
 				arm_macro_state = ArmMacroState::IDLE;
 			}
 		} else if (arm_macro_state == ArmMacroState::LIFT_DOWN) {
@@ -612,7 +641,7 @@ void opcontrol() {
 				lift.move(-127);
 			}
 		} else {
-			double arm_position = arm.get_position();
+			double arm_position = arm_angle();
 			if (master.get_digital(pros::E_CONTROLLER_DIGITAL_X) && arm_position < arm_max) {
 				arm.move(127);
 			} else if (master.get_digital(pros::E_CONTROLLER_DIGITAL_A) && arm_position > arm_min) {
