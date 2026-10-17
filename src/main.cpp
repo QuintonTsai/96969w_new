@@ -57,6 +57,27 @@ void arm_wait(double angle_deg, int velocity, int64_t start_ms, int64_t timeout_
 	}
 }
 
+// lift_rotation counts in centidegrees
+constexpr double lift_rotations = 360 * 100;
+
+// drive the lift at full power, up or down, until lift_rotation reaches target_cdeg, then hold it there;
+// gives up after timeout_ms in case it jams or the sensor stops reporting
+void lift_move_to(double target_cdeg, int64_t timeout_ms = 1500) {
+	bool up = lift_rotation.get_position() < target_cdeg;
+	int64_t start_ms = pros::millis();
+	while ((up ? lift_rotation.get_position() < target_cdeg : lift_rotation.get_position() > target_cdeg) &&
+	       pros::millis() - start_ms < timeout_ms) {
+		lift.move(up ? 127 : -127);
+		pros::delay(10);
+	}
+	lift.move_absolute(lift.get_position(), 100);
+}
+
+// same as lift_move_to, in its own task so it can happen during a drive motion
+void lift_move_async(double target_cdeg, int64_t timeout_ms = 1500) {
+	pros::Task([target_cdeg, timeout_ms]() { lift_move_to(target_cdeg, timeout_ms); });
+}
+
 lemlib::Drivetrain drivetrain(&left_mg, &right_mg,
                                11.75, // track width, in inches
                                lemlib::Omniwheel::NEW_325, // 3.25" omni wheels
@@ -123,6 +144,7 @@ void initialize() {
 			pros::lcd::print(2, "Y: %.1f cm", pose.y * 2.54);
 			pros::lcd::print(3, "Theta: %.1f deg", pose.theta);
 			pros::lcd::print(4, "Arm: %.1f deg", arm_angle());
+			pros::lcd::print(5, "Lift: %.0f", lift_rotation.get_position());
 			pros::delay(50);
 		}
 	});
@@ -353,12 +375,12 @@ void autonomous() {
 	chassis.waitUntilDone();
 
 	// arc right forward, pivoting on the right side (was 500 ms at left 127 / right 25)
-	target_heading += 60; // TUNE angle
+	target_heading += 40; // TUNE angle
 	chassis.swingToHeading(target_heading, lemlib::DriveSide::RIGHT, 1000,
 	                        {.direction = lemlib::AngularDirection::CW_CLOCKWISE, .minSpeed = 127, .earlyExitRange = 10});
 	chassis.waitUntilDone();
 	
-	target_heading -= 50; // TUNE angle
+	target_heading -= 40; // TUNE angle
 	chassis.swingToHeading(target_heading, lemlib::DriveSide::RIGHT, 1000,
 	                       {.direction = lemlib::AngularDirection::CCW_COUNTERCLOCKWISE, .minSpeed = 127, .earlyExitRange = 10});
 	chassis.waitUntilDone();
@@ -391,12 +413,13 @@ void autonomous() {
 	int64_t arm_start_ms = pros::millis();
 
 	// reverse 65 cm
-	driveRelative(target_heading, -65, 2000);
+	driveRelative(target_heading, -68, 2000);
 	chassis.waitUntilDone();
 
 	// wait
 	arm_wait(arm_target, 200, arm_start_ms);
 
+	//FIRST PIN
 	pros::delay(300);
 	holder.move(-127);
 	pros::delay(300);
@@ -406,36 +429,26 @@ void autonomous() {
 	arm_move_to(arm_target, 200);
 	arm_start_ms = pros::millis();
 
-	// forward, turn, backward; replaces a swing right 80 (right side locked) followed by a backward
-	// curve 46 cm back, 27 cm right, 60 left, which together end 19.9 cm back and 28.3 cm left
-	// of here, facing 20 right. turning 30 right makes that forward 29.1 cm then back 56.6 cm
-	// both targets come from this pose up front, so early exits along the way don't shift the end point
-	// extra_back_cm extends the back up past that point along the same 30 degree line
-	const float extra_back_cm = 10; // TUNE distance
-	const float back_line_rad = lemlib::degToRad(30);
-	lemlib::Pose forward_target = relativePose(target_heading, 29.1, 0, 0);
-	lemlib::Pose backward_target = relativePose(target_heading,
-	                                            -19.9 - extra_back_cm * std::cos(back_line_rad),
-	                                            -28.3 - extra_back_cm * std::sin(back_line_rad), 30);
+	pros::delay(150);
 
-	chassis.moveToPoint(forward_target.x, forward_target.y, 1000,
-	                    {.forwards = true, .minSpeed = 127, .earlyExitRange = 2.5f / 2.54f});
+	// back up, turn right, back up; ends where the old forward/turn/back did, 28.6 cm back and
+	// 33.3 cm left of here. turning 60 right makes that 9.3 cm back, then 38.5 cm back
+	// (the turn has to be over about 50 for the first back up to stay backward)
+	driveRelative(target_heading, 15, 1000, 127, 80, 2.5); // TUNE distance
 	chassis.waitUntilDone();
 
-	// point the back of the robot at the end point (30 right)
-	chassis.turnToPoint(backward_target.x, backward_target.y, 1000,
-	                    {.forwards = false, .minSpeed = 127, .earlyExitRange = 10});
+	target_heading += 55; // TUNE angle
+	chassis.turnToHeading(target_heading, 1000, {.minSpeed = 127, .earlyExitRange = 10});
 	chassis.waitUntilDone();
 
 	arm_wait(arm_target, 200, arm_start_ms);
 
-	chassis.moveToPoint(backward_target.x, backward_target.y, 2000,
-	                    {.forwards = false, .minSpeed = 127, .earlyExitRange = 2.54f / 2.54f});
+	driveRelative(target_heading, -62.5, 2000, 127, 127, 2.54); // TUNE distance
 	chassis.waitUntilDone();
 
-	// the robot now faces 30 right instead of the old 20, but keep the old heading so the
-	// 160 turn below still lands on the same absolute heading (it turns 170 instead)
-	target_heading = backward_target.theta;
+	// the old path ended facing 30 right of here, so drop back to that heading; the left turn
+	// below then lands on the same absolute heading as before (it turns 30 more than it says)
+	target_heading -= 30;
 
 	holder.move(127);
 
@@ -446,33 +459,77 @@ void autonomous() {
 	arm_wait(arm_target, 200, arm_start_ms);
 	pros::delay(150);
 	// raise arm while turning
-	arm_target = 88.9;
+	arm_target = 65;
 	arm_move_to(arm_target, 200);
 	arm_start_ms = pros::millis();
 
 	holder.move(0);
 
-	// turn left 160 degrees
-	target_heading -= 150;
-	chassis.turnToHeading(target_heading, 1500, {.minSpeed = 127, .earlyExitRange = 10});
+	// turn left; 150 from the old heading, 180 from where the robot actually faces, so force the
+	// direction (shortest path is a coin flip at 180)
+	target_heading -= 140;
+	// lift goes up to 3 rotations on its sensor while the robot turns
+	lift_move_async(3 * lift_rotations);
+	chassis.turnToHeading(target_heading, 1500,
+	                      {.direction = lemlib::AngularDirection::CCW_COUNTERCLOCKWISE, .minSpeed = 127, .earlyExitRange = 10});
 	chassis.waitUntilDone();
 
 	// drive backward (was 1.5 s full reverse); the timeout still ends it if the robot is pushing against something
 	driveRelative(target_heading, -51, 1500, 127, 80, 2.5); // TUNE distance
 	chassis.waitUntilDone();
-
+	
+	//SECOND PIN
 	arm_wait(arm_target, 200, arm_start_ms);
+	pros::delay(300);
+	holder.move(-127);
+	pros::delay(200);
+	holder.move(0);
 
-	// lower the arm (was 1 s at full reverse, roughly 44 degrees of travel from 89)
-	arm_target = 44.4; // TUNE angle
+	// raise the arm to 100
+	arm_target = 110;
 	arm_move_to(arm_target, 200);
 	arm_start_ms = pros::millis();
-
 	arm_wait(arm_target, 200, arm_start_ms);
 
-	holder.move(-127);
-	pros::delay(300);
+	// forward 30 cm, then lower the lift 3 rotations
+	lift_move_to(lift_rotation.get_position() - 3 * lift_rotations);
+	driveRelative(target_heading, 30, 1000, 127, 80, 2.5); // TUNE distance
+	chassis.waitUntilDone();
+
+	// turn right 30 while the arm lowers to 70
+	arm_move_to(arm_target, 200);
+	arm_start_ms = pros::millis();
+	target_heading += 50;
+	chassis.turnToHeading(target_heading, 1000, {.minSpeed = 127, .earlyExitRange = 10});
+	chassis.waitUntilDone();
+
+	// backward 50 cm
+	driveRelative(target_heading, -85, 1500, 127, 80, 2.5); // TUNE distance
+	chassis.waitUntilDone();
+
+	holder.move(127);
+
+	// lower the arm to 55
+	arm_target = 55;
+	arm_move_to(arm_target, 200);
+	arm_start_ms = pros::millis();
+	arm_wait(arm_target, 200, arm_start_ms);
+
+	// turn left 120 while the arm raises to 70
 	holder.move(0);
+	arm_target = 70;
+	arm_move_to(arm_target, 200);
+	arm_start_ms = pros::millis();
+	target_heading -= 165;
+	chassis.turnToHeading(target_heading, 1500, {.minSpeed = 127, .earlyExitRange = 10});
+	chassis.waitUntilDone();
+
+	// backward 30 cm while the lift raises 6 rotations
+	lift_move_async(lift_rotation.get_position() + 6 * lift_rotations, 3000);
+	driveRelative(target_heading, -45, 1000, 127, 80, 2.5); // TUNE distance
+	chassis.waitUntilDone();
+	holder.move(-127);
+
 
 }
 
@@ -501,10 +558,14 @@ void opcontrol() {
 	constexpr double arm_start = 0.0;
 	constexpr double arm_min = 0.0;
 	constexpr double arm_max = 111.1;
-	constexpr double arm_out_position = 80;
+	constexpr double arm_out_position = 70;
 	constexpr double arm_release_clear = 100.0;
-	constexpr double arm_release_min = 55.6;
-	constexpr int64_t lift_macro_delay_ms = 150;
+	// the UP release only raises the arm to arm_release_clear afterwards when the arm is above this
+	constexpr double arm_raise_min = 50.0;
+	// height the R1 macro raises the lift to so the arm can swing out, on lift_rotation (centidegrees)
+	constexpr double lift_macro_height = 1.75 * 360 * 100; // TUNE, read it off the brain screen
+	// fallback in case the lift jams or the sensor stops reporting
+	constexpr int64_t lift_macro_timeout_ms = 1000;
 	constexpr int64_t holder_release_time_ms = 250;
 	constexpr int64_t arm_macro_timeout_ms = 3000;
 	const int holder_default_speed = 50;
@@ -531,6 +592,8 @@ void opcontrol() {
 	bool up_pressed_last = false;
 	bool arm_extended = false;
 	int64_t macro_state_start_ms = 0;
+	// lift height when the R1 macro started, so the return lowers it back to where the driver had it
+	double lift_macro_start = 0;
 	int64_t release_start_ms = 0;
 
 
@@ -557,6 +620,7 @@ void opcontrol() {
 				if (!arm_extended) {
 					arm_macro_state = ArmMacroState::LIFT_UP;
 					macro_state_start_ms = pros::millis();
+					lift_macro_start = lift_rotation.get_position();
 					arm_extended = true;
 				} else {
 					arm_macro_state = ArmMacroState::LIFT_DOWN;
@@ -568,8 +632,13 @@ void opcontrol() {
 		r1_pressed_last = r1_pressed;
 
 		bool up_pressed = master.get_digital(pros::E_CONTROLLER_DIGITAL_UP);
-		if (up_pressed && !up_pressed_last && arm_macro_state == ArmMacroState::IDLE &&
-		    release_macro_state == ReleaseMacroState::INACTIVE && arm_angle() > arm_release_min) {
+		// also allowed while the arm is still swinging out: ARM_OUT can take up to its 3 s timeout to
+		// settle, and a press during that window used to be dropped. the arm motor keeps driving to
+		// arm_out_position on its own, so ending ARM_OUT here doesn't stop the arm
+		if (up_pressed && !up_pressed_last &&
+		    (arm_macro_state == ArmMacroState::IDLE || arm_macro_state == ArmMacroState::ARM_OUT) &&
+		    release_macro_state == ReleaseMacroState::INACTIVE) {
+			arm_macro_state = ArmMacroState::IDLE;
 			release_macro_state = ReleaseMacroState::RELEASE_HOLDER;
 			release_start_ms = pros::millis();
 		}
@@ -585,8 +654,9 @@ void opcontrol() {
 			holder.move(holder_release_speed);
 			lift.move_absolute(lift_target, 100);
 			if (pros::millis() - release_start_ms >= holder_release_time_ms) {
-				// arm already past the clear height, so skip raising it (would pull it back down)
-				if (arm_angle() > arm_release_clear) {
+				// only raise to clear when the arm is out; with it low the release just spits the piece out.
+				// also skip when it's already past the clear height (raising would pull it back down)
+				if (arm_angle() <= arm_raise_min || arm_angle() > arm_release_clear) {
 					release_macro_state = ReleaseMacroState::INACTIVE;
 				} else {
 					release_macro_state = ReleaseMacroState::RAISE_CLEAR;
@@ -603,12 +673,16 @@ void opcontrol() {
 				release_macro_state = ReleaseMacroState::INACTIVE;
 			}
 		} else if (arm_macro_state == ArmMacroState::LIFT_UP) {
-			lift.move(127);
 			holder.move(holder_macro_speed);
-			if (pros::millis() - macro_state_start_ms >= lift_macro_delay_ms) {
+			// already at or above the height (driver raised it) skips straight to the arm
+			if (lift_position >= lift_macro_height ||
+			    pros::millis() - macro_state_start_ms >= lift_macro_timeout_ms) {
 				lift_target = lift_motor_position;
+				lift.move_absolute(lift_target, 100);
 				arm_macro_state = ArmMacroState::ARM_OUT;
 				macro_state_start_ms = pros::millis();
+			} else {
+				lift.move(127);
 			}
 		} else if (arm_macro_state == ArmMacroState::ARM_OUT) {
 			arm_move_to(arm_out_position, 200);
@@ -632,7 +706,8 @@ void opcontrol() {
 			}
 		} else if (arm_macro_state == ArmMacroState::LIFT_DOWN) {
 			holder.move(holder_default_speed);
-			if (pros::millis() - macro_state_start_ms >= lift_macro_delay_ms || lift_position <= lift_min) {
+			if (lift_position <= lift_macro_start || lift_position <= lift_min ||
+			    pros::millis() - macro_state_start_ms >= lift_macro_timeout_ms) {
 				lift_target = lift_motor_position;
 				lift.move_absolute(lift_target, 100);
 				arm_macro_state = ArmMacroState::ARM_RETURN;
