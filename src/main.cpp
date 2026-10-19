@@ -1,5 +1,6 @@
 #include "main.h"
 #include "lemlib/api.hpp"
+#include <atomic>
 
 pros::MotorGroup left_mg({-9, -10}, pros::v5::MotorGears::blue);
 pros::MotorGroup right_mg({1, 2}, pros::v5::MotorGears::blue);
@@ -29,6 +30,27 @@ double arm_angle() {
 double arm_target_angle = 0;
 double arm_motor_target = 0;
 int64_t arm_move_last_ms = 0;
+enum class AutonSelection { RIGHT, LEFT };
+std::atomic<AutonSelection> selected_auton{AutonSelection::RIGHT};
+std::atomic<bool> auton_selector_active{false};
+
+void render_auton_selector() {
+	AutonSelection selection = selected_auton.load();
+	pros::lcd::print(0, "Auton: %s", selection == AutonSelection::RIGHT ? "RIGHT" : "LEFT");
+	pros::lcd::print(1, "Left btn: Left");
+	pros::lcd::print(2, "Right btn: Right");
+	pros::lcd::print(3, selection == AutonSelection::LEFT ? "Left route not set" : "Right route ready");
+}
+
+void select_left_auton() {
+	selected_auton.store(AutonSelection::LEFT);
+	render_auton_selector();
+}
+
+void select_right_auton() {
+	selected_auton.store(AutonSelection::RIGHT);
+	render_auton_selector();
+}
 
 // move the arm to an absolute sensor angle; the motor's own PID does the moving, but the target is
 // measured from the sensor so slop or slip between the motor and the arm doesn't shift it
@@ -142,13 +164,15 @@ void initialize() {
 	// show the odometry pose on the brain screen, used to measure/tune auton targets
 	pros::Task pose_display([]() {
 		while (true) {
-			lemlib::Pose pose = chassis.getPose();
-			// LemLib tracks in inches; shown in cm to match the auton distances
-			pros::lcd::print(1, "X: %.1f cm", pose.x * 2.54);
-			pros::lcd::print(2, "Y: %.1f cm", pose.y * 2.54);
-			pros::lcd::print(3, "Theta: %.1f deg", pose.theta);
-			pros::lcd::print(4, "Arm: %.1f deg", arm_angle());
-			pros::lcd::print(5, "Lift: %.0f", lift_rotation.get_position());
+			if (!auton_selector_active.load()) {
+				lemlib::Pose pose = chassis.getPose();
+				// LemLib tracks in inches; shown in cm to match the auton distances
+				pros::lcd::print(1, "X: %.1f cm", pose.x * 2.54);
+				pros::lcd::print(2, "Y: %.1f cm", pose.y * 2.54);
+				pros::lcd::print(3, "Theta: %.1f deg", pose.theta);
+				pros::lcd::print(4, "Arm: %.1f deg", arm_angle());
+				pros::lcd::print(5, "Lift: %.0f", lift_rotation.get_position());
+			}
 			pros::delay(50);
 		}
 	});
@@ -170,7 +194,13 @@ void disabled() {}
  * This task will exit when the robot is enabled and autonomous or opcontrol
  * starts.
  */
-void competition_initialize() {}
+void competition_initialize() {
+	auton_selector_active.store(true);
+	pros::lcd::clear();
+	pros::lcd::register_btn0_cb(select_left_auton);
+	pros::lcd::register_btn2_cb(select_right_auton);
+	render_auton_selector();
+}
 
 /**
  * Runs the user autonomous code. This function will be started in its own task
@@ -183,159 +213,6 @@ void competition_initialize() {}
  * will be stopped. Re-enabling the robot will restart the task, not re-start it
  * from where it left off.
  */
-// previous timed version of the auton, kept for reference; not called anywhere
-void timed_autonomous() {
-
-	holder.move(127);
-
-	// arc right
-	int64_t start = pros::millis();
-	while (pros::millis() - start < 100) {
-		right_mg.move(-127);
-		left_mg.move(-127);
-		pros::delay(20);
-	}
-
-	start = pros::millis();
-	while (pros::millis() - start < 500) {
-		right_mg.move(25);
-		left_mg.move(127);
-		pros::delay(20);
-	}
-
-	// arc left backward
-	start = pros::millis();
-	while (pros::millis() - start < 250) {
-		right_mg.move(-25);
-		left_mg.move(-127);
-		pros::delay(20);
-	}
-
-	// arc left
-	start = pros::millis();
-	while (pros::millis() - start < 400) {
-		right_mg.move(127);
-		left_mg.move(25);
-		pros::delay(20);
-	}
-
-	// drive coasts, so let it settle before reading heading
-	left_mg.move(0);
-	right_mg.move(0);
-	pros::delay(100); 
-
-	// turn left  degrees
-	chassis.turnToHeading(chassis.getPose().theta - 75, 1500);
-	chassis.waitUntilDone();
-
-	arm.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
-	double arm_target = arm_angle() + 55.6;
-	arm_move_to(arm_target, 200);
-	int64_t arm_start_ms = pros::millis();
-
-	// reverse
-	const float reverse_in = 65 / 2.54;
-	lemlib::Pose pose = chassis.getPose();
-	float heading_rad = lemlib::degToRad(pose.theta);
-	chassis.moveToPoint(pose.x - reverse_in * std::sin(heading_rad),
-	                    pose.y - reverse_in * std::cos(heading_rad), 2000, {.forwards = false});
-	chassis.waitUntilDone();
-
-	// wait
-	arm_wait(arm_target, 200, arm_start_ms);
-
-	pros::delay(300);
-	holder.move(-127);
-	pros::delay(300);
-	holder.move(0);
-
-	arm_target = 88.9;
-	arm_move_to(arm_target, 200);
-	arm_start_ms = pros::millis();
-
-	// arc right
-	start = pros::millis();
-	while (pros::millis() - start < 300) {
-		right_mg.move(15);
-		left_mg.move(127);
-		pros::delay(20);
-	}
-
-	arm_wait(arm_target, 200, arm_start_ms);
-
-	start = pros::millis();
-	while (pros::millis() - start < 50) {
-		right_mg.move(-127);
-		left_mg.move(127);
-		pros::delay(20);
-	}
-
-	right_mg.move(0);
-	left_mg.move(0);
-
-	lemlib::Pose drive_start_pose = chassis.getPose();
-	//const float target_distance_in = 70.00f / 2.54f;
-	const float target_distance_in = 55.00f / 2.54f;
-	start = pros::millis();
-	while (pros::millis() - start < 8000) {
-		lemlib::Pose current_pose = chassis.getPose();
-		float delta_x = current_pose.x - drive_start_pose.x;
-		float delta_y = current_pose.y - drive_start_pose.y;
-		if (std::sqrt(delta_x * delta_x + delta_y * delta_y) >= target_distance_in) {
-			break;
-		}
-		left_mg.move(-127);
-		//right_mg.move(-127);
-		right_mg.move(-70);
-		pros::delay(20);
-	}
-	left_mg.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
-	right_mg.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
-	left_mg.move(0);
-	right_mg.move(0);
-    
-	holder.move(127);
-
-	arm_target = 55.6;
-	arm_move_to(arm_target, 200);
-	arm_start_ms = pros::millis();
-
-	arm_wait(arm_target, 200, arm_start_ms);
-
-	// raise arm while turning
-	arm_target = 88.9;
-	arm_move_to(arm_target, 200);
-	arm_start_ms = pros::millis();
-
-	// turn left 135 degrees at the end of auton
-	chassis.turnToHeading(chassis.getPose().theta - 160, 1500);
-	chassis.waitUntilDone();
-
-	// drive backward
-	start = pros::millis();
-	while (pros::millis() - start < 1500) {
-		left_mg.move(-127);
-		right_mg.move(-127);
-		pros::delay(20);
-	}
-	left_mg.move(0);
-	right_mg.move(0);
-
-	arm_wait(arm_target, 200, arm_start_ms);
-
-	arm_start_ms = pros::millis();
-	while (pros::millis() - arm_start_ms < 1000) {
-		arm.move(-127);
-		pros::delay(20);
-	}
-	arm.move(0);
-
-	holder.move(-127);
-	pros::delay(300);
-	holder.move(0);
-
-}
-
 // pose offset from the robot's current position, in the frame of heading_deg; distances in cm
 // early-exited motions leave the robot a few degrees off, so callers pass the heading it was aiming for
 // LemLib heading is clockwise from +Y, so forward is (sin, cos) and right is (cos, -sin)
@@ -360,7 +237,7 @@ void driveRelative(float heading_deg, float distance_cm, int timeout, float max_
 }
 
 // values marked TUNE were estimated from the old timed version; measure them with the pose display
-void autonomous() {
+void right_autonomous() {
 	chassis.setPose(0, 0, 0);
 	// the arm is fully down at the start of every match, so re-zero it here; the zero from initialize()
 	// is off if the program was started with the arm raised, which shifts every absolute arm target up
@@ -538,6 +415,145 @@ void autonomous() {
 
 }
 
+void left_autonomous() {
+	// reset pose and hold the drivetrain and arm during autonomous
+	chassis.setPose(0, 0, 0);
+	arm_rotation.reset_position();
+	left_mg.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+	right_mg.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+	arm.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+	double arm_target = arm_angle();
+	float target_heading = 0;
+
+	driveRelative(target_heading, -5, 500, 127, 80, 2.5);
+	chassis.waitUntilDone();
+
+	// mirrored opening swings, then turn toward the first pin
+	target_heading -= 40;
+	chassis.swingToHeading(target_heading, lemlib::DriveSide::LEFT, 1000,
+	                        {.direction = lemlib::AngularDirection::CCW_COUNTERCLOCKWISE, .minSpeed = 127, .earlyExitRange = 10});
+	chassis.waitUntilDone();
+
+	target_heading += 40;
+	chassis.swingToHeading(target_heading, lemlib::DriveSide::LEFT, 1000,
+	                       {.direction = lemlib::AngularDirection::CW_CLOCKWISE, .minSpeed = 127, .earlyExitRange = 10});
+	chassis.waitUntilDone();
+
+	target_heading += 40;
+	chassis.swingToHeading(target_heading, lemlib::DriveSide::RIGHT, 1000,
+	                       {.direction = lemlib::AngularDirection::CW_CLOCKWISE, .minSpeed = 127, .earlyExitRange = 10});
+	chassis.waitUntilDone();
+
+	target_heading += 62.5;
+	chassis.turnToHeading(target_heading, 1000, {.minSpeed = 127, .earlyExitRange = 10});
+	chassis.waitUntilDone();
+
+	arm_target += 55.6;
+	arm_move_to(arm_target, 200);
+	int64_t arm_start_ms = pros::millis();
+	// reverse to the first pin while raising the arm
+	driveRelative(target_heading, -65, 2000);
+	chassis.waitUntilDone();
+	arm_wait(arm_target, 200, arm_start_ms);
+
+	pros::delay(300);
+	holder.move(-127);
+	pros::delay(200);
+	holder.move(0);
+
+	arm_target = 105;
+	arm_move_to(arm_target, 200);
+	arm_start_ms = pros::millis();
+	arm_wait(arm_target, 200, arm_start_ms);
+	pros::delay(150);
+
+	// clear the first pin, then turn and cross to the next scoring area
+	driveRelative(target_heading, 25, 1000, 127, 80, 2.5);
+	chassis.waitUntilDone();
+	pros::delay(200);
+	target_heading -= 50;
+	chassis.turnToHeading(target_heading, 1000, {.minSpeed = 127, .earlyExitRange = 10});
+	chassis.waitUntilDone();
+	pros::delay(200);
+	driveRelative(target_heading, -67.5, 2000, 127, 127, 2.54);
+	chassis.waitUntilDone();
+
+	holder.move(127);
+	// lower the arm and prepare to turn across the field
+	arm_target = 52.5;
+	arm_move_to(arm_target, 200);
+	arm_start_ms = pros::millis();
+	arm_wait(arm_target, 200, arm_start_ms);
+	pros::delay(250);
+	arm_target = 70;
+	arm_move_to(arm_target, 200);
+	arm_start_ms = pros::millis();
+	holder.move(0);
+
+	target_heading += 170;
+	// raise the lift while turning and backing toward the second pin
+	lift_move_async(3 * lift_rotations);
+	chassis.turnToHeading(target_heading, 1500,
+	                      {.direction = lemlib::AngularDirection::CW_CLOCKWISE, .minSpeed = 127, .earlyExitRange = 10});
+	chassis.waitUntilDone();
+	driveRelative(target_heading, -51, 1500, 127, 80, 2.5);
+	chassis.waitUntilDone();
+
+	arm_wait(arm_target, 200, arm_start_ms);
+	// release the second pin
+	pros::delay(300);
+	holder.move(-127);
+	pros::delay(200);
+	holder.move(0);
+
+	arm_target = 110;
+	arm_move_to(arm_target, 200);
+	arm_start_ms = pros::millis();
+	arm_wait(arm_target, 200, arm_start_ms);
+
+	// lower the lift, then reposition for the final approach
+	lift_move_to(lift_rotation.get_position() - 3 * lift_rotations);
+	driveRelative(target_heading, 30, 1000, 127, 80, 2.5);
+	chassis.waitUntilDone();
+	target_heading -= 50;
+	chassis.turnToHeading(target_heading, 1000, {.minSpeed = 127, .earlyExitRange = 10});
+	chassis.waitUntilDone();
+	driveRelative(target_heading, -85, 1500, 127, 80, 2.5);
+	chassis.waitUntilDone();
+
+	holder.move(127);
+	arm_target = 52.5;
+	arm_move_to(arm_target, 200);
+	arm_start_ms = pros::millis();
+	arm_wait(arm_target, 200, arm_start_ms);
+	pros::delay(200);
+	holder.move(0);
+	arm_target = 72.5;
+	arm_move_to(arm_target, 200);
+	arm_start_ms = pros::millis();
+	// turn toward the final target while raising the lift
+	target_heading += 165;
+	chassis.turnToHeading(target_heading, 1500, {.minSpeed = 127, .earlyExitRange = 10});
+	chassis.waitUntilDone();
+
+	// raise the lift while driving to the final scoring position
+	lift_move_async(lift_rotation.get_position() + 6 * lift_rotations, 3000);
+	pros::delay(500);
+	driveRelative(target_heading, -45, 1000, 127, 80, 2.5);
+	chassis.waitUntilDone();
+	pros::delay(300);
+	holder.move(-127);
+}
+
+void autonomous() {
+	auton_selector_active.store(false);
+	if (selected_auton.load() == AutonSelection::RIGHT) {
+		right_autonomous();
+	} else {
+		left_autonomous();
+	}
+}
+
 /**
  * Runs the operator control code. This function will be started in its own task
  * with the default priority and stack size whenever the robot is enabled via
@@ -552,6 +568,7 @@ void autonomous() {
  * task, not resume it from where it left off.
  */
 void opcontrol() {
+	auton_selector_active.store(false);
 	// LemLib motions run in their own task, so one still running when auton is cut off would keep
 	// driving the motors and fight the joysticks until it times out
 	chassis.cancelAllMotions();
