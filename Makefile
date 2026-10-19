@@ -12,6 +12,9 @@ BINDIR=$(ROOT)/bin
 SRCDIR=$(ROOT)/src
 INCDIR=$(ROOT)/include
 
+# Keep reference/source snapshots under src out of the project build.
+EXCLUDE_SRCDIRS=$(SRCDIR)/0708
+
 WARNFLAGS+=
 EXTRA_CFLAGS=
 EXTRA_CXXFLAGS=

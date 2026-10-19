@@ -5,13 +5,17 @@ pros::MotorGroup left_mg({-9, -10}, pros::v5::MotorGears::blue);
 pros::MotorGroup right_mg({1, 2}, pros::v5::MotorGears::blue);
 pros::Imu imu(19);
 pros::Controller master(pros::E_CONTROLLER_MASTER);
-pros::Motor intake(11, pros::v5::MotorGears::blue);
+pros::Motor intake(13, pros::v5::MotorGears::blue);
 pros::MotorGroup lift({3, -8}, pros::v5::MotorGears::green);
 pros::Motor arm(7, pros::v5::MotorGears::green);
 pros::Motor holder(6, pros::v5::MotorGears::green);
 pros::Rotation lift_rotation(5);
 // reversed so the angle counts up as the arm raises, the same direction as the arm motor
 pros::Rotation arm_rotation(-12);
+
+double heading() {
+	return imu.get_rotation();
+}
 
 // the arm sensor reads 100 degrees where the arm motor read 2700, so the motor turns 27 degrees per arm degree
 constexpr double arm_motor_deg_per_deg = 27.0;
@@ -364,6 +368,8 @@ void autonomous() {
 	// hold so each motion stops where LemLib ends it instead of coasting into the next one
 	left_mg.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
 	right_mg.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+	arm.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+	double arm_target = arm_angle();
 
 
 	// the opening moves exit early at speed and flow into each other like the old timed arcs,
@@ -403,17 +409,16 @@ void autonomous() {
     */
 	// turn left 80 degrees (the arcs used to contribute 30 of this); this one stops precisely
 	// since the 65 cm reverse depends on it
-	target_heading -= 65;
-	chassis.turnToHeading(target_heading, 1500);
+	target_heading -= 62.5; // TUNE angle
+	chassis.turnToHeading(target_heading, 1000, {.minSpeed = 127, .earlyExitRange = 10});
 	chassis.waitUntilDone();
 
-	arm.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
-	double arm_target = arm_angle() + 55.6;
+	arm_target += 55.6;
 	arm_move_to(arm_target, 200);
 	int64_t arm_start_ms = pros::millis();
 
 	// reverse 65 cm
-	driveRelative(target_heading, -68, 2000);
+	driveRelative(target_heading, -65, 2000);
 	chassis.waitUntilDone();
 
 	// wait
@@ -422,52 +427,52 @@ void autonomous() {
 	//FIRST PIN
 	pros::delay(300);
 	holder.move(-127);
-	pros::delay(300);
+	pros::delay(200);
 	holder.move(0);
 
 	arm_target = 105;
 	arm_move_to(arm_target, 200);
 	arm_start_ms = pros::millis();
+	arm_wait(arm_target, 200, arm_start_ms);
+
 
 	pros::delay(150);
 
 	// back up, turn right, back up; ends where the old forward/turn/back did, 28.6 cm back and
 	// 33.3 cm left of here. turning 60 right makes that 9.3 cm back, then 38.5 cm back
 	// (the turn has to be over about 50 for the first back up to stay backward)
-	driveRelative(target_heading, 15, 1000, 127, 80, 2.5); // TUNE distance
+	driveRelative(target_heading, 25, 1000, 127, 80, 2.5); // TUNE distance
 	chassis.waitUntilDone();
+	pros::delay(200);
 
-	target_heading += 55; // TUNE angle
+	target_heading += 50; // TUNE angle
 	chassis.turnToHeading(target_heading, 1000, {.minSpeed = 127, .earlyExitRange = 10});
 	chassis.waitUntilDone();
+	pros::delay(200);
 
-	arm_wait(arm_target, 200, arm_start_ms);
-
-	driveRelative(target_heading, -62.5, 2000, 127, 127, 2.54); // TUNE distance
+	driveRelative(target_heading, -67.5, 2000, 127, 127, 2.54); // TUNE distance
 	chassis.waitUntilDone();
 
 	// the old path ended facing 30 right of here, so drop back to that heading; the left turn
 	// below then lands on the same absolute heading as before (it turns 30 more than it says)
-	target_heading -= 30;
 
 	holder.move(127);
 
-	arm_target = 55.6;
+	arm_target = 52.5;
 	arm_move_to(arm_target, 200);
 	arm_start_ms = pros::millis();
 
 	arm_wait(arm_target, 200, arm_start_ms);
-	pros::delay(150);
+	pros::delay(250);
 	// raise arm while turning
-	arm_target = 65;
+	arm_target = 70;
 	arm_move_to(arm_target, 200);
 	arm_start_ms = pros::millis();
-
 	holder.move(0);
 
 	// turn left; 150 from the old heading, 180 from where the robot actually faces, so force the
 	// direction (shortest path is a coin flip at 180)
-	target_heading -= 140;
+	target_heading -= 170;
 	// lift goes up to 3 rotations on its sensor while the robot turns
 	lift_move_async(3 * lift_rotations);
 	chassis.turnToHeading(target_heading, 1500,
@@ -496,9 +501,6 @@ void autonomous() {
 	driveRelative(target_heading, 30, 1000, 127, 80, 2.5); // TUNE distance
 	chassis.waitUntilDone();
 
-	// turn right 30 while the arm lowers to 70
-	arm_move_to(arm_target, 200);
-	arm_start_ms = pros::millis();
 	target_heading += 50;
 	chassis.turnToHeading(target_heading, 1000, {.minSpeed = 127, .earlyExitRange = 10});
 	chassis.waitUntilDone();
@@ -510,14 +512,15 @@ void autonomous() {
 	holder.move(127);
 
 	// lower the arm to 55
-	arm_target = 55;
+	arm_target = 52.5;
 	arm_move_to(arm_target, 200);
 	arm_start_ms = pros::millis();
 	arm_wait(arm_target, 200, arm_start_ms);
+	pros::delay(200);
 
 	// turn left 120 while the arm raises to 70
 	holder.move(0);
-	arm_target = 70;
+	arm_target = 72.5;
 	arm_move_to(arm_target, 200);
 	arm_start_ms = pros::millis();
 	target_heading -= 165;
@@ -526,8 +529,10 @@ void autonomous() {
 
 	// backward 30 cm while the lift raises 6 rotations
 	lift_move_async(lift_rotation.get_position() + 6 * lift_rotations, 3000);
+	pros::delay(500);
 	driveRelative(target_heading, -45, 1000, 127, 80, 2.5); // TUNE distance
 	chassis.waitUntilDone();
+	pros::delay(300);
 	holder.move(-127);
 
 
